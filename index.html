@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>V5 - Resumen Ejecutivo - Viajes Procesados</title>
+  <title>V6 - Resumen Ejecutivo - Viajes Procesados</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
   <style>
@@ -72,10 +72,11 @@ $('pickBtn').onclick=e=>{e.stopPropagation();$('fileInput').click()}; $('drop').
 function setFiles(f){files=f;$('processBtn').disabled=!files.length;$('filelist').innerHTML=files.map(x=>`• ${escapeHtml(x.name)} (${(x.size/1024/1024).toFixed(1)} MB)`).join('<br>');$('status').textContent=files.length?`${files.length} archivo(s) listo(s) para procesar.`:'Esperando archivos…'}
 $('clearBtn').onclick=()=>{files=[];rows=[];selectedUsers.clear();activeBrands.clear();$('fileInput').value='';$('filelist').innerHTML='';$('bar').style.width='0';$('status').textContent='Esperando archivos…';$('processBtn').disabled=true;$('dashboard').classList.add('hidden');renderUsers()};
 $('processBtn').onclick=processFiles;
-async function processFiles(){rows=[];$('processBtn').disabled=true;let done=0,totalPages=0;try{for(const file of files){const pdf=await pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;totalPages+=pdf.numPages;for(let p=1;p<=pdf.numPages;p++){const page=await pdf.getPage(p);const extracted=await extractPage(page,file.name,p);rows.push(...extracted);done++;$('bar').style.width=`${Math.min(100,done/Math.max(totalPages,done)*100)}%`;$('status').textContent=`Procesando ${file.name}: página ${p} de ${pdf.numPages}…`;await new Promise(r=>setTimeout(r,0));}} if(!rows.length)throw new Error('No se identificaron registros. Verifica que el PDF corresponda al formato de Viajes Procesados.'); initializeFilters();$('dashboard').classList.remove('hidden');const detected=[...new Set(rows.map(r=>r.user))].sort();$('status').textContent=`Listo: ${rows.length.toLocaleString('es-MX')} viajes y ${detected.length.toLocaleString('es-MX')} usuario(s) detectados en ${files.length} archivo(s): ${detected.join(', ')}.`;$('bar').style.width='100%';renderAll();}catch(err){console.error(err);$('status').textContent='Error: '+err.message;}finally{$('processBtn').disabled=!files.length}}
+async function processFiles(){rows=[];$('processBtn').disabled=true;let done=0,totalPages=0;try{for(const file of files){const pdf=await pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;totalPages+=pdf.numPages;for(let p=1;p<=pdf.numPages;p++){const page=await pdf.getPage(p);const extracted=await extractPage(page,file.name,p);rows.push(...extracted);done++;$('bar').style.width=`${Math.min(100,done/Math.max(totalPages,done)*100)}%`;$('status').textContent=`Procesando ${file.name}: página ${p} de ${pdf.numPages}…`;await new Promise(r=>setTimeout(r,0));}} if(!rows.length)throw new Error('No se identificaron registros. Verifica que el PDF corresponda al formato de Viajes Procesados.'); initializeFilters();$('dashboard').classList.remove('hidden');const detected=[...new Set(rows.map(r=>r.user))].sort();const mismatches=rows.filter(r=>r.totalMismatch).length;
+$('status').textContent=`Listo V6: ${rows.length.toLocaleString('es-MX')} viajes y ${detected.length.toLocaleString('es-MX')} usuario(s) detectados en ${files.length} archivo(s): ${detected.join(', ')}. Total ingreso usa siempre “Total Ing” del PDF${mismatches?` (${mismatches.toLocaleString('es-MX')} filas con diferencia entre desglose y total, sin afectar el total ejecutivo)`:''}.`;$('bar').style.width='100%';renderAll();}catch(err){console.error(err);$('status').textContent='Error: '+err.message;}finally{$('processBtn').disabled=!files.length}}
 
 async function extractPage(page,fileName,pageNum){
-  const tc=await page.getTextContent();
+  const tc=await page.getTextContent({disableCombineTextItems:true});
   const vp=page.getViewport({scale:1});
   const H=vp.height;
 
@@ -89,7 +90,9 @@ async function extractPage(page,fileName,pageNum){
     .map(i=>({
       text:i.str.trim(),
       x:i.transform[4],
-      y:H-i.transform[5]
+      y:H-i.transform[5],
+      width:Math.abs(i.width||0),
+      height:Math.abs(i.height||0)
     }));
 
   const dates=items.filter(i=>/^\d{2}\/\d{2}\/\d{4}$/.test(i.text));
@@ -98,11 +101,10 @@ async function extractPage(page,fileName,pageNum){
 
   for(const d of dates){
     const ax=d.x;
-    // En el PDF original los campos del mismo viaje quedan alineados por X,
-    // pero algunas variantes (especialmente TRT VOLKS BUS) desplazan ciertos
-    // textos varios puntos. 4.8 pt captura esas variaciones sin alcanzar la
-    // columna vecina, normalmente separada aproximadamente 10-12 pt.
-    const col=items.filter(i=>Math.abs(i.x-ax)<=4.8);
+    // Cada viaje está dibujado como una columna vertical y sus campos comparten X.
+    // Con disableCombineTextItems evitamos que PDF.js fusione usuarios repetidos.
+    // La tolerancia se mantiene estrecha para no mezclar el viaje vecino.
+    const col=items.filter(i=>Math.abs(i.x-ax)<=1.8);
 
     const inBand=(lo,hi)=>col
       .filter(i=>i.y>=lo&&i.y<hi)
@@ -112,11 +114,18 @@ async function extractPage(page,fileName,pageNum){
 
     // El usuario NO se infiere de encabezados ni del generador del reporte.
     // Se toma exclusivamente de la banda "Usuario procesa" de ESTA columna.
-    const userCandidates=inBand(0,52).filter(v=>
-      /^[A-Z][A-Z0-9._-]{2,}$/i.test(v) &&
-      !['USUARIO','PROCESA','PAGO','TIPO'].includes(v.toUpperCase())
-    );
-    const user=cleanUser(userCandidates[0]||'');
+    const isUserToken=v=>/^[A-Z][A-Z0-9._-]{2,}$/i.test(v) &&
+      !['USUARIO','PROCESA','PAGO','TIPO','ORDINARIO','DIRECTO','CORTO','CHOFERES'].includes(v.toUpperCase());
+    let userCandidates=inBand(0,52).filter(isUserToken);
+    let user=cleanUser(userCandidates[0]||'');
+    // Respaldo: si PDF.js todavía separa ligeramente el texto del usuario,
+    // buscamos el token válido más cercano al X del viaje sólo en la banda Usuario procesa.
+    if(!user){
+      const nearUser=items
+        .filter(i=>i.y>=0&&i.y<52&&isUserToken(i.text)&&Math.abs(i.x-ax)<=4.5)
+        .sort((a,b)=>Math.abs(a.x-ax)-Math.abs(b.x-ax))[0];
+      user=cleanUser(nearUser?.text||'');
+    }
 
     const r={
       file:fileName,page:pageNum,brand,user,
@@ -128,7 +137,8 @@ async function extractPage(page,fileName,pageNum){
       autobus:field(195,225),
       kms:toN(field(230,255)),
       corte:field(255,294),
-      totalPdf:toN(field(294,326)),
+      totalPdfRaw:field(294,326),
+      total:toN(field(294,326)),
       equipaje:toN(field(338,370)),
       promocion:toN(field(378,410)),
       prepago:toN(field(416,452)),
@@ -143,7 +153,14 @@ async function extractPage(page,fileName,pageNum){
       conductor1:field(798,838)
     };
 
-    r.total=(r.taquilla||0)+(r.manual||0)+(r.abordo||0)+(r.prepago||0)+(r.promocion||0)+(r.equipaje||0);
+    // El total oficial es la columna Total Ing del PDF. No se reconstruye desde
+    // conceptos individuales porque PDF.js puede fragmentar alguno de ellos.
+    // Sólo si Total Ing no está presente se usa la suma de conceptos como respaldo.
+    const componentSum=(r.taquilla||0)+(r.manual||0)+(r.abordo||0)+(r.prepago||0)+(r.promocion||0)+(r.equipaje||0);
+    if(!String(r.totalPdfRaw||'').trim()) r.total=componentSum;
+    r.componentSum=componentSum;
+    r.totalMismatch=Math.abs((r.total||0)-componentSum)>0.02;
+
     if(validRow(r)){
       r.tickets=(r.bolAbordo||0)+(r.bolPrepago||0)+(r.bolManual||0)+(r.bolTaquilla||0);
       out.push(r);
@@ -171,10 +188,10 @@ function filteredRows(){return rows.filter(r=>activeBrands.has(r.brand) && (mode
 function renderAll(){if(!rows.length)return;const data=filteredRows(),users=[...new Set(data.map(r=>r.user))];$('kTrips').textContent=num(data.length);$('kUsers').textContent=num(users.length);$('kIncome').textContent=money(sum(data,'total'));$('kKm').textContent=num(sum(data,'kms'));$('kTickets').textContent=num(sum(data,'tickets'));$('kFiles').textContent=num(new Set(data.map(r=>r.file)).size);$('filterText').textContent=mode==='include'?`Mostrando ${users.length} usuario(s) seleccionado(s)`:`Mostrando todos excepto ${selectedUsers.size} usuario(s) seleccionado(s)`;renderTable(data);renderCharts(data)}
 function summary(data){const g=group(data,r=>r.user);return Object.entries(g).map(([user,a])=>({user,trips:a.length,taquilla:sum(a,'taquilla'),manual:sum(a,'manual'),abordo:sum(a,'abordo'),prepago:sum(a,'prepago'),total:sum(a,'total'),kms:sum(a,'kms'),tickets:sum(a,'tickets')})).sort((a,b)=>b.trips-a.trips)}
 function renderTable(data){const s=summary(data);$('tbody').innerHTML=s.map(r=>`<tr class="user-row"><td>${escapeHtml(r.user)}</td><td>${num(r.trips)}</td><td>${money(r.taquilla)}</td><td>${money(r.manual)}</td><td>${money(r.abordo)}</td><td>${money(r.prepago)}</td><td>${money(r.total)}</td><td>${num(r.kms)}</td><td>${num(r.tickets)}</td></tr>`).join('')||'<tr><td colspan="9" class="empty">El filtro actual no contiene registros.</td></tr>'}
-function renderCharts(data){const s=summary(data).slice(0,15);destroyChart('users');destroyChart('income');charts.users=new Chart($('chartUsers'),{type:'bar',data:{labels:s.map(x=>x.user),datasets:[{label:'Viajes',data:s.map(x=>x.trips)}]},options:{responsive:true,maintainAspectRatio:false,indexAxis:'y',plugins:{legend:{display:false}},scales:{x:{ticks:{color:'#b8bdd7'},grid:{color:'#303452'}},y:{ticks:{color:'#dfe2f6'},grid:{display:false}}}}});const vals=[sum(data,'taquilla'),sum(data,'manual'),sum(data,'abordo'),sum(data,'prepago'),sum(data,'promocion'),sum(data,'equipaje')];charts.income=new Chart($('chartIncome'),{type:'doughnut',data:{labels:['Taquilla','Venta Manual / Canje','Abordo','Prepago','Promoción','Equipaje'],datasets:[{data:vals}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#dfe2f6'}}}}})}
+function renderCharts(data){const s=summary(data).slice(0,15);destroyChart('users');destroyChart('income');charts.users=new Chart($('chartUsers'),{type:'bar',data:{labels:s.map(x=>x.user),datasets:[{label:'Viajes',data:s.map(x=>x.trips)}]},options:{responsive:true,maintainAspectRatio:false,indexAxis:'y',plugins:{legend:{display:false}},scales:{x:{ticks:{color:'#b8bdd7'},grid:{color:'#303452'}},y:{ticks:{color:'#dfe2f6'},grid:{display:false}}}}});const vals=[sum(data,'taquilla'),sum(data,'manual'),sum(data,'abordo'),sum(data,'prepago'),sum(data,'promocion'),sum(data,'equipaje')];charts.income=new Chart($('chartIncome'),{type:'doughnut',data:{labels:['Taquilla','Manual','Abordo','Prepago','Promoción','Equipaje'],datasets:[{data:vals}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#dfe2f6'}}}}})}
 function destroyChart(k){if(charts[k]){charts[k].destroy();charts[k]=null}}
 function group(a,key){return a.reduce((o,x)=>{const k=key(x);(o[k]??=[]).push(x);return o},{})}function sum(a,k){return a.reduce((s,x)=>s+(+x[k]||0),0)}
-$('csvBtn').onclick=()=>{const s=summary(filteredRows()),headers=['Usuario','Viajes','Ing Taquilla','Venta Manual / Canje','Ing Abordo','Prepago','Total Ing','Kms','Boletos'];const lines=[headers.join(','),...s.map(r=>[r.user,r.trips,r.taquilla.toFixed(2),r.manual.toFixed(2),r.abordo.toFixed(2),r.prepago.toFixed(2),r.total.toFixed(2),r.kms.toFixed(2),r.tickets].map(csv).join(','))];const blob=new Blob(['\ufeff'+lines.join('\n')],{type:'text/csv;charset=utf-8'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='resumen_usuarios.csv';a.click();URL.revokeObjectURL(a.href)};
+$('csvBtn').onclick=()=>{const s=summary(filteredRows()),headers=['Usuario','Viajes','Ing Taquilla','Ing Manual','Ing Abordo','Prepago','Total Ing','Kms','Boletos'];const lines=[headers.join(','),...s.map(r=>[r.user,r.trips,r.taquilla.toFixed(2),r.manual.toFixed(2),r.abordo.toFixed(2),r.prepago.toFixed(2),r.total.toFixed(2),r.kms.toFixed(2),r.tickets].map(csv).join(','))];const blob=new Blob(['\ufeff'+lines.join('\n')],{type:'text/csv;charset=utf-8'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='resumen_usuarios.csv';a.click();URL.revokeObjectURL(a.href)};
 function csv(v){v=String(v);return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v}function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}function escapeAttr(s){return escapeHtml(s)}
 </script>
 </body>
