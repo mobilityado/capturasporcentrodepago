@@ -72,22 +72,82 @@ $('pickBtn').onclick=e=>{e.stopPropagation();$('fileInput').click()}; $('drop').
 function setFiles(f){files=f;$('processBtn').disabled=!files.length;$('filelist').innerHTML=files.map(x=>`• ${escapeHtml(x.name)} (${(x.size/1024/1024).toFixed(1)} MB)`).join('<br>');$('status').textContent=files.length?`${files.length} archivo(s) listo(s) para procesar.`:'Esperando archivos…'}
 $('clearBtn').onclick=()=>{files=[];rows=[];selectedUsers.clear();activeBrands.clear();$('fileInput').value='';$('filelist').innerHTML='';$('bar').style.width='0';$('status').textContent='Esperando archivos…';$('processBtn').disabled=true;$('dashboard').classList.add('hidden');renderUsers()};
 $('processBtn').onclick=processFiles;
-async function processFiles(){rows=[];$('processBtn').disabled=true;let done=0,totalPages=0;try{for(const file of files){const pdf=await pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;totalPages+=pdf.numPages;for(let p=1;p<=pdf.numPages;p++){const page=await pdf.getPage(p);const extracted=await extractPage(page,file.name,p);rows.push(...extracted);done++;$('bar').style.width=`${Math.min(100,done/Math.max(totalPages,done)*100)}%`;$('status').textContent=`Procesando ${file.name}: página ${p} de ${pdf.numPages}…`;await new Promise(r=>setTimeout(r,0));}} if(!rows.length)throw new Error('No se identificaron registros. Verifica que el PDF corresponda al formato de Viajes Procesados.'); initializeFilters();$('dashboard').classList.remove('hidden');$('status').textContent=`Listo: ${rows.length.toLocaleString('es-MX')} viajes y ${new Set(rows.map(r=>r.user)).size.toLocaleString('es-MX')} usuario(s) detectados en ${files.length} archivo(s).`;$('bar').style.width='100%';renderAll();}catch(err){console.error(err);$('status').textContent='Error: '+err.message;}finally{$('processBtn').disabled=!files.length}}
+async function processFiles(){rows=[];$('processBtn').disabled=true;let done=0,totalPages=0;try{for(const file of files){const pdf=await pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;totalPages+=pdf.numPages;for(let p=1;p<=pdf.numPages;p++){const page=await pdf.getPage(p);const extracted=await extractPage(page,file.name,p);rows.push(...extracted);done++;$('bar').style.width=`${Math.min(100,done/Math.max(totalPages,done)*100)}%`;$('status').textContent=`Procesando ${file.name}: página ${p} de ${pdf.numPages}…`;await new Promise(r=>setTimeout(r,0));}} if(!rows.length)throw new Error('No se identificaron registros. Verifica que el PDF corresponda al formato de Viajes Procesados.'); initializeFilters();$('dashboard').classList.remove('hidden');const detected=[...new Set(rows.map(r=>r.user))].sort();$('status').textContent=`Listo: ${rows.length.toLocaleString('es-MX')} viajes y ${detected.length.toLocaleString('es-MX')} usuario(s) detectados en ${files.length} archivo(s): ${detected.join(', ')}.`;$('bar').style.width='100%';renderAll();}catch(err){console.error(err);$('status').textContent='Error: '+err.message;}finally{$('processBtn').disabled=!files.length}}
 
-async function extractPage(page,fileName,pageNum){const tc=await page.getTextContent();const vp=page.getViewport({scale:1});const items=tc.items.filter(i=>i.str&&i.str.trim()).map(i=>{const t=pdfjsLib.Util.transform(vp.transform,i.transform);return{text:i.str.trim(),x:t[4],y:t[5]}});const dates=items.filter(i=>/^\d{2}\/\d{2}\/\d{4}$/.test(i.text));let brand=findBrand(items,fileName),out=[];
-  for(const d of dates){const ax=d.x;
-    // Cada viaje está impreso como una columna vertical. Las columnas de viajes
-    // están muy juntas (aprox. 10-12 puntos), por lo que un margen de 13 mezclaba
-    // el USUARIO QUE PROCESA de los viajes vecinos. Tomamos únicamente elementos
-    // prácticamente alineados con la fecha del mismo viaje.
-    const near=items.filter(i=>Math.abs(i.x-ax)<=3.2);
-    const field=(lo,hi,join=' ')=>near.filter(i=>i.y>=lo&&i.y<hi).sort((a,b)=>a.y-b.y||a.x-b.x).map(i=>i.text).join(join).trim();
-    // PDF.js viewport coordinates match the visible portrait page used by these reports.
-    let r={file:fileName,page:pageNum,brand,user:field(0,42),tipoPago:field(42,88),bolAbordo:toN(field(88,116)),bolPrepago:toN(field(116,142)),bolManual:toN(field(142,168)),bolTaquilla:toN(field(168,192)),autobus:field(192,228),kms:toN(field(228,252)),corte:field(252,282),total:toN(field(282,323)),equipaje:toN(field(323,368)),promocion:toN(field(368,408)),prepago:toN(field(408,448)),abordo:toN(field(448,490)),manual:toN(field(490,535)),taquilla:toN(field(535,580)),destino:field(590,622),origen:field(622,647),hora:field(647,673),fecha:d.text,corrida:field(705,752),conductor1:field(795,835)};
-    // Some PDF.js builds invert the Y axis after viewport conversion. Retry using mirrored bands.
-    if(!validRow(r)){const H=vp.height;const f=(lo,hi)=>near.filter(i=>{let yy=H-i.y;return yy>=lo&&yy<hi}).sort((a,b)=>(H-a.y)-(H-b.y)||a.x-b.x).map(i=>i.text).join(' ').trim();r={file:fileName,page:pageNum,brand,user:f(0,42),tipoPago:f(42,88),bolAbordo:toN(f(88,116)),bolPrepago:toN(f(116,142)),bolManual:toN(f(142,168)),bolTaquilla:toN(f(168,192)),autobus:f(192,228),kms:toN(f(228,252)),corte:f(252,282),total:toN(f(282,323)),equipaje:toN(f(323,368)),promocion:toN(f(368,408)),prepago:toN(f(408,448)),abordo:toN(f(448,490)),manual:toN(f(490,535)),taquilla:toN(f(535,580)),destino:f(590,622),origen:f(622,647),hora:f(647,673),fecha:d.text,corrida:f(705,752),conductor1:f(795,835)}}
-    if(validRow(r)){r.user=cleanUser(r.user);r.tickets=(r.bolAbordo||0)+(r.bolPrepago||0)+(r.bolManual||0)+(r.bolTaquilla||0);out.push(r)}
-  } return dedupe(out);
+async function extractPage(page,fileName,pageNum){
+  const tc=await page.getTextContent();
+  const vp=page.getViewport({scale:1});
+  const H=vp.height;
+
+  // IMPORTANTE: estos reportes están dibujados "de lado" dentro de una hoja
+  // vertical. No debemos usar las coordenadas transformadas por el viewport,
+  // porque allí todos los viajes de una misma fila terminan compartiendo X.
+  // En las coordenadas originales del PDF, transform[4] identifica la columna
+  // de cada viaje. transform[5] se convierte a coordenada desde la parte superior.
+  const items=tc.items
+    .filter(i=>i.str&&i.str.trim())
+    .map(i=>({
+      text:i.str.trim(),
+      x:i.transform[4],
+      y:H-i.transform[5]
+    }));
+
+  const dates=items.filter(i=>/^\d{2}\/\d{2}\/\d{4}$/.test(i.text));
+  const brand=findBrand(items,fileName);
+  const out=[];
+
+  for(const d of dates){
+    const ax=d.x;
+    // En el PDF original todos los campos de un viaje comparten prácticamente
+    // el mismo X. Una tolerancia pequeña permite variaciones de render sin
+    // mezclar el viaje vecino (normalmente separado 10-12 puntos).
+    const col=items.filter(i=>Math.abs(i.x-ax)<=2.6);
+
+    const inBand=(lo,hi)=>col
+      .filter(i=>i.y>=lo&&i.y<hi)
+      .sort((a,b)=>a.y-b.y)
+      .map(i=>i.text);
+    const field=(lo,hi)=>inBand(lo,hi).join(' ').trim();
+
+    // El usuario NO se infiere de encabezados ni del generador del reporte.
+    // Se toma exclusivamente de la banda "Usuario procesa" de ESTA columna.
+    const userCandidates=inBand(0,52).filter(v=>
+      /^[A-Z][A-Z0-9._-]{2,}$/i.test(v) &&
+      !['USUARIO','PROCESA','PAGO','TIPO'].includes(v.toUpperCase())
+    );
+    const user=cleanUser(userCandidates[0]||'');
+
+    const r={
+      file:fileName,page:pageNum,brand,user,
+      tipoPago:field(52,92),
+      bolAbordo:toN(field(92,112)),
+      bolPrepago:toN(field(118,140)),
+      bolManual:toN(field(145,168)),
+      bolTaquilla:toN(field(170,192)),
+      autobus:field(195,225),
+      kms:toN(field(230,255)),
+      corte:field(255,294),
+      total:toN(field(294,326)),
+      equipaje:toN(field(338,370)),
+      promocion:toN(field(378,410)),
+      prepago:toN(field(416,452)),
+      abordo:toN(field(458,497)),
+      manual:toN(field(503,542)),
+      taquilla:toN(field(548,580)),
+      destino:field(600,627),
+      origen:field(627,651),
+      hora:field(651,678),
+      fecha:d.text,
+      corrida:field(718,760),
+      conductor1:field(798,838)
+    };
+
+    if(validRow(r)){
+      r.tickets=(r.bolAbordo||0)+(r.bolPrepago||0)+(r.bolManual||0)+(r.bolTaquilla||0);
+      out.push(r);
+    }
+  }
+  return dedupe(out);
 }
 function validRow(r){return !!r.user && /^[A-Z0-9._-]{3,}$/i.test(cleanUser(r.user)) && r.total>=0 && !!r.conductor1}
 function cleanUser(s){
