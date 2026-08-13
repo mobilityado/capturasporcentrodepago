@@ -72,10 +72,16 @@ $('pickBtn').onclick=e=>{e.stopPropagation();$('fileInput').click()}; $('drop').
 function setFiles(f){files=f;$('processBtn').disabled=!files.length;$('filelist').innerHTML=files.map(x=>`• ${escapeHtml(x.name)} (${(x.size/1024/1024).toFixed(1)} MB)`).join('<br>');$('status').textContent=files.length?`${files.length} archivo(s) listo(s) para procesar.`:'Esperando archivos…'}
 $('clearBtn').onclick=()=>{files=[];rows=[];selectedUsers.clear();activeBrands.clear();$('fileInput').value='';$('filelist').innerHTML='';$('bar').style.width='0';$('status').textContent='Esperando archivos…';$('processBtn').disabled=true;$('dashboard').classList.add('hidden');renderUsers()};
 $('processBtn').onclick=processFiles;
-async function processFiles(){rows=[];$('processBtn').disabled=true;let done=0,totalPages=0;try{for(const file of files){const pdf=await pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;totalPages+=pdf.numPages;for(let p=1;p<=pdf.numPages;p++){const page=await pdf.getPage(p);const extracted=await extractPage(page,file.name,p);rows.push(...extracted);done++;$('bar').style.width=`${Math.min(100,done/Math.max(totalPages,done)*100)}%`;$('status').textContent=`Procesando ${file.name}: página ${p} de ${pdf.numPages}…`;await new Promise(r=>setTimeout(r,0));}} if(!rows.length)throw new Error('No se identificaron registros. Verifica que el PDF corresponda al formato de Viajes Procesados.'); initializeFilters();$('dashboard').classList.remove('hidden');$('status').textContent=`Listo: ${rows.length.toLocaleString('es-MX')} viajes detectados en ${files.length} archivo(s).`;$('bar').style.width='100%';renderAll();}catch(err){console.error(err);$('status').textContent='Error: '+err.message;}finally{$('processBtn').disabled=!files.length}}
+async function processFiles(){rows=[];$('processBtn').disabled=true;let done=0,totalPages=0;try{for(const file of files){const pdf=await pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;totalPages+=pdf.numPages;for(let p=1;p<=pdf.numPages;p++){const page=await pdf.getPage(p);const extracted=await extractPage(page,file.name,p);rows.push(...extracted);done++;$('bar').style.width=`${Math.min(100,done/Math.max(totalPages,done)*100)}%`;$('status').textContent=`Procesando ${file.name}: página ${p} de ${pdf.numPages}…`;await new Promise(r=>setTimeout(r,0));}} if(!rows.length)throw new Error('No se identificaron registros. Verifica que el PDF corresponda al formato de Viajes Procesados.'); initializeFilters();$('dashboard').classList.remove('hidden');$('status').textContent=`Listo: ${rows.length.toLocaleString('es-MX')} viajes y ${new Set(rows.map(r=>r.user)).size.toLocaleString('es-MX')} usuario(s) detectados en ${files.length} archivo(s).`;$('bar').style.width='100%';renderAll();}catch(err){console.error(err);$('status').textContent='Error: '+err.message;}finally{$('processBtn').disabled=!files.length}}
 
 async function extractPage(page,fileName,pageNum){const tc=await page.getTextContent();const vp=page.getViewport({scale:1});const items=tc.items.filter(i=>i.str&&i.str.trim()).map(i=>{const t=pdfjsLib.Util.transform(vp.transform,i.transform);return{text:i.str.trim(),x:t[4],y:t[5]}});const dates=items.filter(i=>/^\d{2}\/\d{2}\/\d{4}$/.test(i.text));let brand=findBrand(items,fileName),out=[];
-  for(const d of dates){const ax=d.x;const near=items.filter(i=>Math.abs(i.x-ax)<=13);const field=(lo,hi,join=' ')=>near.filter(i=>i.y>=lo&&i.y<hi).sort((a,b)=>a.y-b.y||a.x-b.x).map(i=>i.text).join(join).trim();
+  for(const d of dates){const ax=d.x;
+    // Cada viaje está impreso como una columna vertical. Las columnas de viajes
+    // están muy juntas (aprox. 10-12 puntos), por lo que un margen de 13 mezclaba
+    // el USUARIO QUE PROCESA de los viajes vecinos. Tomamos únicamente elementos
+    // prácticamente alineados con la fecha del mismo viaje.
+    const near=items.filter(i=>Math.abs(i.x-ax)<=3.2);
+    const field=(lo,hi,join=' ')=>near.filter(i=>i.y>=lo&&i.y<hi).sort((a,b)=>a.y-b.y||a.x-b.x).map(i=>i.text).join(join).trim();
     // PDF.js viewport coordinates match the visible portrait page used by these reports.
     let r={file:fileName,page:pageNum,brand,user:field(0,42),tipoPago:field(42,88),bolAbordo:toN(field(88,116)),bolPrepago:toN(field(116,142)),bolManual:toN(field(142,168)),bolTaquilla:toN(field(168,192)),autobus:field(192,228),kms:toN(field(228,252)),corte:field(252,282),total:toN(field(282,323)),equipaje:toN(field(323,368)),promocion:toN(field(368,408)),prepago:toN(field(408,448)),abordo:toN(field(448,490)),manual:toN(field(490,535)),taquilla:toN(field(535,580)),destino:field(590,622),origen:field(622,647),hora:field(647,673),fecha:d.text,corrida:field(705,752),conductor1:field(795,835)};
     // Some PDF.js builds invert the Y axis after viewport conversion. Retry using mirrored bands.
@@ -84,7 +90,12 @@ async function extractPage(page,fileName,pageNum){const tc=await page.getTextCon
   } return dedupe(out);
 }
 function validRow(r){return !!r.user && /^[A-Z0-9._-]{3,}$/i.test(cleanUser(r.user)) && r.total>=0 && !!r.conductor1}
-function cleanUser(s){return (s||'').replace(/\s+/g,' ').trim().split(' ').filter(x=>/^[A-Z][A-Z0-9._-]{2,}$/i.test(x)).pop()||''}
+function cleanUser(s){
+  const stop=new Set(['ORDINARIO','DIRECTO','CORTO','CHOFERES','PAGO','USUARIO','PROCESA']);
+  const parts=(s||'').replace(/\s+/g,' ').trim().split(' ')
+    .filter(x=>/^[A-Z][A-Z0-9._-]{2,}$/i.test(x) && !stop.has(x.toUpperCase()));
+  return parts.pop()||'';
+}
 function toN(s){const v=parseFloat(String(s||'0').replace(/,/g,'').replace(/[^0-9.-]/g,''));return Number.isFinite(v)?v:0}
 function findBrand(items,file){const all=items.map(i=>i.text).join(' ');let m=all.match(/Marca\s*:?\s*(SUR VOLKSBUS|TRT VOLKS BUS|SUR|TRT)/i);if(m)return m[1].toUpperCase().replace('VOLKS BUS','VOLKSBUS');let f=file.toUpperCase();return f.includes('SURVB')?'SUR VOLKSBUS':f.includes('TRTVB')?'TRT VOLKSBUS':f.includes('SUR')?'SUR':f.includes('TRT')?'TRT':'OTRA'}
 function dedupe(arr){const seen=new Set();return arr.filter(r=>{const k=[r.file,r.page,r.conductor1,r.corrida,r.fecha,r.hora,r.user].join('|');if(seen.has(k))return false;seen.add(k);return true})}
