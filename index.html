@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Resumen Ejecutivo - Viajes Procesados</title>
+  <title>V4 - Resumen Ejecutivo - Viajes Procesados</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
   <style>
@@ -98,10 +98,11 @@ async function extractPage(page,fileName,pageNum){
 
   for(const d of dates){
     const ax=d.x;
-    // En el PDF original todos los campos de un viaje comparten prácticamente
-    // el mismo X. Una tolerancia pequeña permite variaciones de render sin
-    // mezclar el viaje vecino (normalmente separado 10-12 puntos).
-    const col=items.filter(i=>Math.abs(i.x-ax)<=2.6);
+    // En el PDF original los campos del mismo viaje quedan alineados por X,
+    // pero algunas variantes (especialmente TRT VOLKS BUS) desplazan ciertos
+    // textos varios puntos. 4.8 pt captura esas variaciones sin alcanzar la
+    // columna vecina, normalmente separada aproximadamente 10-12 pt.
+    const col=items.filter(i=>Math.abs(i.x-ax)<=4.8);
 
     const inBand=(lo,hi)=>col
       .filter(i=>i.y>=lo&&i.y<hi)
