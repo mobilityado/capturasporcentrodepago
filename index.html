@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>V7 - V6 - Resumen Ejecutivo - Viajes Procesados</title>
+  <title>V8 - Resumen Ejecutivo - Viajes Procesados</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
   <style>
@@ -24,7 +24,7 @@
 </head>
 <body>
 <div class="app">
-  <header class="hero"><div><h1>Resumen Ejecutivo de Viajes</h1><p>Carga uno o varios PDF, analiza la operación y filtra por <b>USUARIO QUE PROCESA</b>.</p></div><div class="badge">🔒 Procesamiento local en tu navegador</div></header>
+  <header class="hero"><div><h1>Resumen Ejecutivo de Viajes</h1><p>Carga uno o varios PDF, analiza la operación y filtra por <b>USUARIO QUE PROCESA</b>. <span style="opacity:.65">V8</span></p></div><div class="badge">🔒 Procesamiento local en tu navegador</div></header>
 
   <div class="grid top">
     <section class="panel">
@@ -59,7 +59,7 @@
 
     <section class="panel" style="margin-top:16px">
       <div class="section-title"><div><h2>Resumen por usuario</h2><div id="filterText" class="count"></div></div><button id="csvBtn" class="btn secondary">Exportar CSV</button></div>
-      <div class="tablewrap"><table><thead><tr><th>Usuario</th><th>Viajes</th><th>Ing. Abordo</th><th>Venta Manual / Canje</th><th>Ing. Taquilla</th><th>Equipaje</th><th>Prepago</th><th>Total 5 conceptos</th><th>Kms</th><th>Boletos</th></tr></thead><tbody id="tbody"></tbody></table></div>
+      <div class="tablewrap"><table><thead><tr><th>Usuario</th><th>Viajes</th><th>Ing. Abordo</th><th>Venta Manual / Canje</th><th>Ing. Taquilla</th><th>Equipaje</th><th>Prepago</th><th>Promoción</th><th>Total 6 conceptos</th><th>Kms</th><th>Boletos</th></tr></thead><tbody id="tbody"></tbody></table></div>
     </section>
   </section>
 </div>
@@ -73,7 +73,7 @@ function setFiles(f){files=f;$('processBtn').disabled=!files.length;$('filelist'
 $('clearBtn').onclick=()=>{files=[];rows=[];selectedUsers.clear();activeBrands.clear();$('fileInput').value='';$('filelist').innerHTML='';$('bar').style.width='0';$('status').textContent='Esperando archivos…';$('processBtn').disabled=true;$('dashboard').classList.add('hidden');renderUsers()};
 $('processBtn').onclick=processFiles;
 async function processFiles(){rows=[];$('processBtn').disabled=true;let done=0,totalPages=0;try{for(const file of files){const pdf=await pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;totalPages+=pdf.numPages;for(let p=1;p<=pdf.numPages;p++){const page=await pdf.getPage(p);const extracted=await extractPage(page,file.name,p);rows.push(...extracted);done++;$('bar').style.width=`${Math.min(100,done/Math.max(totalPages,done)*100)}%`;$('status').textContent=`Procesando ${file.name}: página ${p} de ${pdf.numPages}…`;await new Promise(r=>setTimeout(r,0));}} if(!rows.length)throw new Error('No se identificaron registros. Verifica que el PDF corresponda al formato de Viajes Procesados.'); initializeFilters();$('dashboard').classList.remove('hidden');const detected=[...new Set(rows.map(r=>r.user))].sort();const mismatches=rows.filter(r=>r.totalMismatch).length;
-$('status').textContent=`Listo V7: ${rows.length.toLocaleString('es-MX')} viajes y ${detected.length.toLocaleString('es-MX')} usuario(s) detectados en ${files.length} archivo(s): ${detected.join(', ')}. Total ingreso = Abordo + Venta Manual/Canje + Taquilla + Equipaje + Prepago${mismatches?` (${mismatches.toLocaleString('es-MX')} filas con diferencia entre desglose y total, sin afectar el total ejecutivo)`:''}.`;$('bar').style.width='100%';renderAll();}catch(err){console.error(err);$('status').textContent='Error: '+err.message;}finally{$('processBtn').disabled=!files.length}}
+$('status').textContent=`Listo V8: ${rows.length.toLocaleString('es-MX')} viajes y ${detected.length.toLocaleString('es-MX')} usuario(s) detectados en ${files.length} archivo(s): ${detected.join(', ')}. Total ingreso = Taquilla + Manual + Abordo + Prepago + Promoción + Equipaje${mismatches?` (${mismatches.toLocaleString('es-MX')} filas con diferencia entre la suma de 6 conceptos y Total Ing; se muestran para auditoría)`:''}.`;$('bar').style.width='100%';renderAll();}catch(err){console.error(err);$('status').textContent='Error: '+err.message;}finally{$('processBtn').disabled=!files.length}}
 
 async function extractPage(page,fileName,pageNum){
   const tc=await page.getTextContent({disableCombineTextItems:true});
@@ -84,26 +84,61 @@ async function extractPage(page,fileName,pageNum){
     width:Math.abs(i.width||0), height:Math.abs(i.height||0)
   }));
   const brand=findBrand(items,fileName), out=[];
-  const stopUsers=new Set(['USUARIO','PROCESA','PAGO','TIPO','ORDINARIO','DIRECTO','CORTO','CHOFERES']);
+  const stopUsers=new Set(['USUARIO','PROCESA','PAGO','TIPO','ORDINARIO','ORDINARIO2','DIRECTO','CORTO','CHOFERES']);
   const isUserToken=v=>/^[A-Z][A-Z0-9._-]{2,}$/i.test(v)&&!stopUsers.has(v.toUpperCase());
-  // V7: un viaje por cada valor real de la banda "Usuario procesa".
-  const anchors=items.filter(i=>i.y>=0&&i.y<52&&isUserToken(i.text)).sort((a,b)=>a.x-b.x);
-  for(const a of anchors){
+
+  // V8: el texto vertical de Usuario procesa termina cerca de y=51.
+  // En algunas páginas PDF.js lo coloca unos puntos más abajo; por eso el
+  // límite anterior (<52) perdía registros. Tomamos una banda amplia y luego
+  // validamos cada candidato por la presencia del Total Ing y Conductor 1
+  // en la misma columna física del viaje.
+  const candidates=items.filter(i=>i.y>=0&&i.y<72&&isUserToken(i.text)).sort((a,b)=>a.x-b.x);
+
+  const nearestText=(ax,lo,hi,maxDx=5.5)=>{
+    const c=items.filter(i=>i.y>=lo&&i.y<hi&&Math.abs(i.x-ax)<=maxDx)
+      .sort((p,q)=>Math.abs(p.x-ax)-Math.abs(q.x-ax)||p.y-q.y);
+    if(!c.length)return '';
+    const bestDx=Math.abs(c[0].x-ax);
+    return c.filter(i=>Math.abs(Math.abs(i.x-ax)-bestDx)<0.35)
+      .sort((p,q)=>p.y-q.y).map(i=>i.text).join(' ').trim();
+  };
+
+  for(const a of candidates){
     const ax=a.x;
-    const col=items.filter(i=>Math.abs(i.x-ax)<=1.8);
-    const field=(lo,hi)=>col.filter(i=>i.y>=lo&&i.y<hi).sort((p,q)=>p.y-q.y).map(i=>i.text).join(' ').trim();
+    // Verificación estructural: un usuario real debe tener Total Ing y
+    // Conductor 1 alineados en la misma fila/columna del reporte.
+    const totalRaw=nearestText(ax,294,327,5.5);
+    const conductorRaw=nearestText(ax,800,840,5.5);
+    if(!totalRaw || !conductorRaw || !/^[-\d,.$ ]+$/.test(totalRaw)) continue;
+
     const r={
-      file:fileName,page:pageNum,brand,user:cleanUser(a.text),tipoPago:field(52,92),
-      bolAbordo:toN(field(92,112)),bolPrepago:toN(field(118,140)),bolManual:toN(field(145,168)),bolTaquilla:toN(field(170,192)),
-      autobus:field(195,225),kms:toN(field(230,255)),corte:field(255,294),
-      totalPdfRaw:field(294,326),totalPdf:toN(field(294,326)),
-      equipaje:toN(field(338,370)),promocion:toN(field(378,410)),prepago:toN(field(416,452)),
-      abordo:toN(field(458,497)),manual:toN(field(503,542)),taquilla:toN(field(548,580)),
-      destino:field(600,627),origen:field(627,651),hora:field(651,678),fecha:field(675,718),
-      corrida:field(718,760),conductor1:field(798,838)
+      file:fileName,page:pageNum,brand,user:cleanUser(a.text),
+      tipoPago:nearestText(ax,52,94),
+      bolAbordo:toN(nearestText(ax,92,114)),
+      bolPrepago:toN(nearestText(ax,116,142)),
+      bolManual:toN(nearestText(ax,143,170)),
+      bolTaquilla:toN(nearestText(ax,170,194)),
+      autobus:nearestText(ax,195,227),
+      kms:toN(nearestText(ax,229,256)),
+      corte:nearestText(ax,256,294),
+      totalPdfRaw:totalRaw,totalPdf:toN(totalRaw),
+      equipaje:toN(nearestText(ax,336,371)),
+      promocion:toN(nearestText(ax,376,411)),
+      prepago:toN(nearestText(ax,414,454)),
+      abordo:toN(nearestText(ax,456,499)),
+      manual:toN(nearestText(ax,501,544)),
+      taquilla:toN(nearestText(ax,546,582)),
+      destino:nearestText(ax,598,628),
+      origen:nearestText(ax,628,653),
+      hora:nearestText(ax,653,678),
+      fecha:nearestText(ax,676,718),
+      corrida:nearestText(ax,718,762),
+      conductor1:conductorRaw
     };
-    // Total solicitado = las cinco columnas del Excel.
-    r.total=(r.abordo||0)+(r.manual||0)+(r.taquilla||0)+(r.equipaje||0)+(r.prepago||0);
+
+    // Los seis conceptos exactos mostrados en el PDF:
+    // Ing Taquilla + Ing Manual + Ing Abordo + Prepago + Promoción + Equipaje.
+    r.total=(r.taquilla||0)+(r.manual||0)+(r.abordo||0)+(r.prepago||0)+(r.promocion||0)+(r.equipaje||0);
     r.totalMismatch=Math.abs((r.totalPdf||0)-r.total)>0.02;
     if(validRow(r)){
       r.tickets=(r.bolAbordo||0)+(r.bolPrepago||0)+(r.bolManual||0)+(r.bolTaquilla||0);
@@ -130,12 +165,12 @@ $('modeInclude').onclick=()=>setMode('include');$('modeExclude').onclick=()=>set
 function renderBrands(){const brands=[...new Set(rows.map(r=>r.brand))].sort();$('brands').innerHTML=brands.map(b=>`<button class="chip ${activeBrands.has(b)?'active':''}" data-brand="${escapeAttr(b)}">${escapeHtml(b)}</button>`).join('');$('brands').querySelectorAll('.chip').forEach(c=>c.onclick=()=>{activeBrands.has(c.dataset.brand)?activeBrands.delete(c.dataset.brand):activeBrands.add(c.dataset.brand);renderBrands();renderAll()})}
 function filteredRows(){return rows.filter(r=>activeBrands.has(r.brand) && (mode==='include'?selectedUsers.has(r.user):!selectedUsers.has(r.user)))}
 function renderAll(){if(!rows.length)return;const data=filteredRows(),users=[...new Set(data.map(r=>r.user))];$('kTrips').textContent=num(data.length);$('kUsers').textContent=num(users.length);$('kIncome').textContent=money(sum(data,'total'));$('kKm').textContent=num(sum(data,'kms'));$('kTickets').textContent=num(sum(data,'tickets'));$('kFiles').textContent=num(new Set(data.map(r=>r.file)).size);$('filterText').textContent=mode==='include'?`Mostrando ${users.length} usuario(s) seleccionado(s)`:`Mostrando todos excepto ${selectedUsers.size} usuario(s) seleccionado(s)`;renderTable(data);renderCharts(data)}
-function summary(data){const g=group(data,r=>r.user);return Object.entries(g).map(([user,a])=>({user,trips:a.length,abordo:sum(a,'abordo'),manual:sum(a,'manual'),taquilla:sum(a,'taquilla'),equipaje:sum(a,'equipaje'),prepago:sum(a,'prepago'),total:sum(a,'total'),kms:sum(a,'kms'),tickets:sum(a,'tickets')})).sort((a,b)=>b.trips-a.trips)}
-function renderTable(data){const s=summary(data);$('tbody').innerHTML=s.map(r=>`<tr class="user-row"><td>${escapeHtml(r.user)}</td><td>${num(r.trips)}</td><td>${money(r.abordo)}</td><td>${money(r.manual)}</td><td>${money(r.taquilla)}</td><td>${money(r.equipaje)}</td><td>${money(r.prepago)}</td><td>${money(r.total)}</td><td>${num(r.kms)}</td><td>${num(r.tickets)}</td></tr>`).join('')||'<tr><td colspan="10" class="empty">El filtro actual no contiene registros.</td></tr>'}
-function renderCharts(data){const s=summary(data).slice(0,15);destroyChart('users');destroyChart('income');charts.users=new Chart($('chartUsers'),{type:'bar',data:{labels:s.map(x=>x.user),datasets:[{label:'Viajes',data:s.map(x=>x.trips)}]},options:{responsive:true,maintainAspectRatio:false,indexAxis:'y',plugins:{legend:{display:false}},scales:{x:{ticks:{color:'#b8bdd7'},grid:{color:'#303452'}},y:{ticks:{color:'#dfe2f6'},grid:{display:false}}}}});const vals=[sum(data,'abordo'),sum(data,'manual'),sum(data,'taquilla'),sum(data,'equipaje'),sum(data,'prepago')];charts.income=new Chart($('chartIncome'),{type:'doughnut',data:{labels:['Abordo','Venta Manual / Canje','Taquilla','Equipaje','Prepago'],datasets:[{data:vals}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#dfe2f6'}}}}})}
+function summary(data){const g=group(data,r=>r.user);return Object.entries(g).map(([user,a])=>({user,trips:a.length,abordo:sum(a,'abordo'),manual:sum(a,'manual'),taquilla:sum(a,'taquilla'),equipaje:sum(a,'equipaje'),prepago:sum(a,'prepago'),promocion:sum(a,'promocion'),total:sum(a,'total'),kms:sum(a,'kms'),tickets:sum(a,'tickets')})).sort((a,b)=>b.trips-a.trips)}
+function renderTable(data){const s=summary(data);$('tbody').innerHTML=s.map(r=>`<tr class="user-row"><td>${escapeHtml(r.user)}</td><td>${num(r.trips)}</td><td>${money(r.abordo)}</td><td>${money(r.manual)}</td><td>${money(r.taquilla)}</td><td>${money(r.equipaje)}</td><td>${money(r.prepago)}</td><td>${money(r.promocion)}</td><td>${money(r.total)}</td><td>${num(r.kms)}</td><td>${num(r.tickets)}</td></tr>`).join('')||'<tr><td colspan="11" class="empty">El filtro actual no contiene registros.</td></tr>'}
+function renderCharts(data){const s=summary(data).slice(0,15);destroyChart('users');destroyChart('income');charts.users=new Chart($('chartUsers'),{type:'bar',data:{labels:s.map(x=>x.user),datasets:[{label:'Viajes',data:s.map(x=>x.trips)}]},options:{responsive:true,maintainAspectRatio:false,indexAxis:'y',plugins:{legend:{display:false}},scales:{x:{ticks:{color:'#b8bdd7'},grid:{color:'#303452'}},y:{ticks:{color:'#dfe2f6'},grid:{display:false}}}}});const vals=[sum(data,'taquilla'),sum(data,'manual'),sum(data,'abordo'),sum(data,'prepago'),sum(data,'promocion'),sum(data,'equipaje')];charts.income=new Chart($('chartIncome'),{type:'doughnut',data:{labels:['Taquilla','Manual','Abordo','Prepago','Promoción','Equipaje'],datasets:[{data:vals}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#dfe2f6'}}}}})}
 function destroyChart(k){if(charts[k]){charts[k].destroy();charts[k]=null}}
 function group(a,key){return a.reduce((o,x)=>{const k=key(x);(o[k]??=[]).push(x);return o},{})}function sum(a,k){return a.reduce((s,x)=>s+(+x[k]||0),0)}
-$('csvBtn').onclick=()=>{const s=summary(filteredRows()),headers=['Usuario','Viajes','Ing Abordo','Venta Manual / Canje','Ing Taquilla','Equipaje','Prepago','Total 5 conceptos','Kms','Boletos'];const lines=[headers.join(','),...s.map(r=>[r.user,r.trips,r.abordo.toFixed(2),r.manual.toFixed(2),r.taquilla.toFixed(2),r.equipaje.toFixed(2),r.prepago.toFixed(2),r.total.toFixed(2),r.kms.toFixed(2),r.tickets].map(csv).join(','))];const blob=new Blob(['\ufeff'+lines.join('\n')],{type:'text/csv;charset=utf-8'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='resumen_usuarios.csv';a.click();URL.revokeObjectURL(a.href)};
+$('csvBtn').onclick=()=>{const s=summary(filteredRows()),headers=['Usuario','Viajes','Ing Abordo','Venta Manual / Canje','Ing Taquilla','Equipaje','Prepago','Promoción','Total 6 conceptos','Kms','Boletos'];const lines=[headers.join(','),...s.map(r=>[r.user,r.trips,r.abordo.toFixed(2),r.manual.toFixed(2),r.taquilla.toFixed(2),r.equipaje.toFixed(2),r.prepago.toFixed(2),r.promocion.toFixed(2),r.total.toFixed(2),r.kms.toFixed(2),r.tickets].map(csv).join(','))];const blob=new Blob(['\ufeff'+lines.join('\n')],{type:'text/csv;charset=utf-8'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='resumen_usuarios.csv';a.click();URL.revokeObjectURL(a.href)};
 function csv(v){v=String(v);return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v}function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}function escapeAttr(s){return escapeHtml(s)}
 </script>
 </body>
