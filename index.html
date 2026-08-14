@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>V10 - Resumen Ejecutivo - Viajes Procesados</title>
+  <title>V11 - Resumen Ejecutivo - Viajes Procesados</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
   <style>
@@ -24,7 +24,7 @@
 </head>
 <body>
 <div class="app">
-  <header class="hero"><div><h1>Resumen Ejecutivo de Viajes</h1><p>Carga uno o varios PDF, analiza la operación y filtra por <b>USUARIO QUE PROCESA</b>. <span style="opacity:.65">V10</span></p></div><div class="badge">🔒 Procesamiento local en tu navegador</div></header>
+  <header class="hero"><div><h1>Resumen Ejecutivo de Viajes</h1><p>Carga uno o varios PDF, analiza la operación y filtra por <b>USUARIO QUE PROCESA</b>. <span style="opacity:.65">V11</span></p></div><div class="badge">🔒 Procesamiento local en tu navegador</div></header>
 
   <div class="grid top">
     <section class="panel">
@@ -73,7 +73,8 @@ function setFiles(f){files=f;$('processBtn').disabled=!files.length;$('filelist'
 $('clearBtn').onclick=()=>{files=[];rows=[];selectedUsers.clear();activeBrands.clear();$('fileInput').value='';$('filelist').innerHTML='';$('bar').style.width='0';$('status').textContent='Esperando archivos…';$('processBtn').disabled=true;$('dashboard').classList.add('hidden');renderUsers()};
 $('processBtn').onclick=processFiles;
 async function processFiles(){rows=[];$('processBtn').disabled=true;let done=0,totalPages=0;try{for(const file of files){const pdf=await pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;totalPages+=pdf.numPages;for(let p=1;p<=pdf.numPages;p++){const page=await pdf.getPage(p);const extracted=await extractPage(page,file.name,p);rows.push(...extracted);done++;$('bar').style.width=`${Math.min(100,done/Math.max(totalPages,done)*100)}%`;$('status').textContent=`Procesando ${file.name}: página ${p} de ${pdf.numPages}…`;await new Promise(r=>setTimeout(r,0));}} if(!rows.length)throw new Error('No se identificaron registros. Verifica que el PDF corresponda al formato de Viajes Procesados.'); initializeFilters();$('dashboard').classList.remove('hidden');const detected=[...new Set(rows.map(r=>r.user))].sort();const mismatches=rows.filter(r=>r.totalMismatch).length;
-$('status').textContent=`Listo V10: ${rows.length.toLocaleString('es-MX')} viajes y ${detected.length.toLocaleString('es-MX')} usuario(s) detectados en ${files.length} archivo(s): ${detected.join(', ')}. Total ingreso = Taquilla + Manual + Abordo + Prepago + Promoción + Equipaje${mismatches?` (${mismatches.toLocaleString('es-MX')} filas con diferencia entre la suma de 6 conceptos y Total Ing; se muestran para auditoría)`:''}.`;$('bar').style.width='100%';renderAll();}catch(err){console.error(err);$('status').textContent='Error: '+err.message;}finally{$('processBtn').disabled=!files.length}}
+const control=['WGALVARADO','EHERNANDEZM','ERJIMENEZ'].map(u=>`${u}: ${rows.filter(r=>r.user===u).length.toLocaleString('es-MX')}`).join(' | ');
+$('status').textContent=`Listo V11: ${rows.length.toLocaleString('es-MX')} viajes y ${detected.length.toLocaleString('es-MX')} usuario(s) detectados en ${files.length} archivo(s). Control: ${control}. Total ingreso = Taquilla + Manual + Abordo + Prepago + Promoción + Equipaje${mismatches?` (${mismatches.toLocaleString('es-MX')} filas con diferencia contra Total Ing)`:''}.`;$('bar').style.width='100%';renderAll();}catch(err){console.error(err);$('status').textContent='Error: '+err.message;}finally{$('processBtn').disabled=!files.length}}
 
 async function extractPage(page,fileName,pageNum){
   const tc=await page.getTextContent({disableCombineTextItems:true});
@@ -85,14 +86,27 @@ async function extractPage(page,fileName,pageNum){
   }));
   const brand=findBrand(items,fileName), out=[];
   const stopUsers=new Set(['USUARIO','PROCESA','PAGO','TIPO','ORDINARIO','ORDINARIO2','DIRECTO','CORTO','CHOFERES']);
-  const isUserToken=v=>/^[A-Z][A-Z0-9._-]{2,}$/i.test(v)&&!stopUsers.has(v.toUpperCase());
 
-  // V10: el texto vertical de Usuario procesa termina cerca de y=51.
-  // En algunas páginas PDF.js lo coloca unos puntos más abajo; por eso el
-  // límite anterior (<52) perdía registros. Tomamos una banda amplia y luego
-  // validamos cada candidato por la presencia del Total Ing y Conductor 1
-  // en la misma columna física del viaje.
-  const candidates=items.filter(i=>i.y>=0&&i.y<72&&isUserToken(i.text)).sort((a,b)=>a.x-b.x);
+  // V11: PDF.js a veces combina TIPO PAGO + USUARIO PROCESA en un solo item,
+  // por ejemplo "ORDINARIO EHERNANDEZM" o "DIRECTO CORTO EHERNANDEZM".
+  // En las versiones anteriores sólo aceptábamos un token aislado y por eso
+  // se perdían viajes válidos. Extraemos el último token que tenga forma de
+  // usuario y después validamos la fila contra Total Ing y Conductor 1.
+  const userFromText=s=>{
+    const parts=String(s||'').toUpperCase().replace(/[^A-Z0-9._-]+/g,' ').trim().split(/\s+/)
+      .filter(Boolean)
+      .filter(x=>/^[A-Z][A-Z0-9._-]{2,}$/.test(x) && !stopUsers.has(x));
+    if(!parts.length) return '';
+    const u=parts[parts.length-1];
+    // Los usuarios reales del reporte contienen letras y normalmente 5+ caracteres.
+    return /[A-Z]/.test(u) && u.length>=4 ? u : '';
+  };
+
+  // La combinación con Tipo Pago puede mover el origen del item hacia abajo,
+  // por eso usamos una banda más amplia que cubre ambas columnas visuales.
+  const candidates=items.map(i=>({...i,userCandidate:userFromText(i.text)}))
+    .filter(i=>i.y>=0&&i.y<115&&i.userCandidate)
+    .sort((a,b)=>a.x-b.x);
 
   const nearestText=(ax,lo,hi,maxDx=5.5)=>{
     const c=items.filter(i=>i.y>=lo&&i.y<hi&&Math.abs(i.x-ax)<=maxDx)
@@ -112,7 +126,7 @@ async function extractPage(page,fileName,pageNum){
     if(!totalRaw || !conductorRaw || !/^[-\d,.$ ]+$/.test(totalRaw)) continue;
 
     const r={
-      file:fileName,page:pageNum,brand,user:cleanUser(a.text),
+      file:fileName,page:pageNum,brand,user:a.userCandidate||cleanUser(a.text),
       tipoPago:nearestText(ax,52,94),
       bolAbordo:toN(nearestText(ax,92,114)),
       bolPrepago:toN(nearestText(ax,116,142)),
