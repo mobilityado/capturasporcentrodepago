@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>V8 - Resumen Ejecutivo - Viajes Procesados</title>
+  <title>V10 - Resumen Ejecutivo - Viajes Procesados</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
   <style>
@@ -24,7 +24,7 @@
 </head>
 <body>
 <div class="app">
-  <header class="hero"><div><h1>Resumen Ejecutivo de Viajes</h1><p>Carga uno o varios PDF, analiza la operación y filtra por <b>USUARIO QUE PROCESA</b>. <span style="opacity:.65">V8</span></p></div><div class="badge">🔒 Procesamiento local en tu navegador</div></header>
+  <header class="hero"><div><h1>Resumen Ejecutivo de Viajes</h1><p>Carga uno o varios PDF, analiza la operación y filtra por <b>USUARIO QUE PROCESA</b>. <span style="opacity:.65">V10</span></p></div><div class="badge">🔒 Procesamiento local en tu navegador</div></header>
 
   <div class="grid top">
     <section class="panel">
@@ -72,8 +72,8 @@ $('pickBtn').onclick=e=>{e.stopPropagation();$('fileInput').click()}; $('drop').
 function setFiles(f){files=f;$('processBtn').disabled=!files.length;$('filelist').innerHTML=files.map(x=>`• ${escapeHtml(x.name)} (${(x.size/1024/1024).toFixed(1)} MB)`).join('<br>');$('status').textContent=files.length?`${files.length} archivo(s) listo(s) para procesar.`:'Esperando archivos…'}
 $('clearBtn').onclick=()=>{files=[];rows=[];selectedUsers.clear();activeBrands.clear();$('fileInput').value='';$('filelist').innerHTML='';$('bar').style.width='0';$('status').textContent='Esperando archivos…';$('processBtn').disabled=true;$('dashboard').classList.add('hidden');renderUsers()};
 $('processBtn').onclick=processFiles;
-async function processFiles(){rows=[];$('processBtn').disabled=true;let done=0,totalPages=0;try{for(const file of files){const pdf=await pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;totalPages+=pdf.numPages;for(let p=1;p<=pdf.numPages;p++){const page=await pdf.getPage(p);const extracted=await extractPage(page,file.name,p);rows.push(...extracted);done++;$('bar').style.width=`${Math.min(100,done/Math.max(totalPages,done)*100)}%`;$('status').textContent=`Procesando ${file.name}: página ${p} de ${pdf.numPages}…`;await new Promise(r=>setTimeout(r,0));}} if(!rows.length)throw new Error('No se identificaron registros. Verifica que el PDF corresponda al formato de Viajes Procesados.'); initializeFilters();$('dashboard').classList.remove('hidden');const detected=[...new Set(rows.map(r=>r.user))].sort();const mismatches=rows.filter(r=>r.totalMismatch).length;const bc=Object.entries(group(rows,r=>r.brand)).map(([b,a])=>`${b}: ${a.length.toLocaleString('es-MX')}`).join(' | ');
-$('status').textContent=`Listo V9: ${rows.length.toLocaleString('es-MX')} viajes y ${detected.length.toLocaleString('es-MX')} usuario(s) detectados en ${files.length} archivo(s): ${detected.join(', ')}. Registros por marca: ${bc}. Total ingreso = Taquilla + Manual + Abordo + Prepago + Promoción + Equipaje; Total Ing del PDF se usa como control de auditoría${mismatches?` (${mismatches.toLocaleString('es-MX')} filas con diferencia entre la suma de 6 conceptos y Total Ing; se muestran para auditoría)`:''}.`;$('bar').style.width='100%';renderAll();}catch(err){console.error(err);$('status').textContent='Error: '+err.message;}finally{$('processBtn').disabled=!files.length}}
+async function processFiles(){rows=[];$('processBtn').disabled=true;let done=0,totalPages=0;try{for(const file of files){const pdf=await pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;totalPages+=pdf.numPages;for(let p=1;p<=pdf.numPages;p++){const page=await pdf.getPage(p);const extracted=await extractPage(page,file.name,p);rows.push(...extracted);done++;$('bar').style.width=`${Math.min(100,done/Math.max(totalPages,done)*100)}%`;$('status').textContent=`Procesando ${file.name}: página ${p} de ${pdf.numPages}…`;await new Promise(r=>setTimeout(r,0));}} if(!rows.length)throw new Error('No se identificaron registros. Verifica que el PDF corresponda al formato de Viajes Procesados.'); initializeFilters();$('dashboard').classList.remove('hidden');const detected=[...new Set(rows.map(r=>r.user))].sort();const mismatches=rows.filter(r=>r.totalMismatch).length;
+$('status').textContent=`Listo V10: ${rows.length.toLocaleString('es-MX')} viajes y ${detected.length.toLocaleString('es-MX')} usuario(s) detectados en ${files.length} archivo(s): ${detected.join(', ')}. Total ingreso = Taquilla + Manual + Abordo + Prepago + Promoción + Equipaje${mismatches?` (${mismatches.toLocaleString('es-MX')} filas con diferencia entre la suma de 6 conceptos y Total Ing; se muestran para auditoría)`:''}.`;$('bar').style.width='100%';renderAll();}catch(err){console.error(err);$('status').textContent='Error: '+err.message;}finally{$('processBtn').disabled=!files.length}}
 
 async function extractPage(page,fileName,pageNum){
   const tc=await page.getTextContent({disableCombineTextItems:true});
@@ -84,32 +84,36 @@ async function extractPage(page,fileName,pageNum){
     width:Math.abs(i.width||0), height:Math.abs(i.height||0)
   }));
   const brand=findBrand(items,fileName), out=[];
+  const stopUsers=new Set(['USUARIO','PROCESA','PAGO','TIPO','ORDINARIO','ORDINARIO2','DIRECTO','CORTO','CHOFERES']);
+  const isUserToken=v=>/^[A-Z][A-Z0-9._-]{2,}$/i.test(v)&&!stopUsers.has(v.toUpperCase());
 
-  const nearestText=(ax,lo,hi,maxDx=6.5)=>{
+  // V10: el texto vertical de Usuario procesa termina cerca de y=51.
+  // En algunas páginas PDF.js lo coloca unos puntos más abajo; por eso el
+  // límite anterior (<52) perdía registros. Tomamos una banda amplia y luego
+  // validamos cada candidato por la presencia del Total Ing y Conductor 1
+  // en la misma columna física del viaje.
+  const candidates=items.filter(i=>i.y>=0&&i.y<72&&isUserToken(i.text)).sort((a,b)=>a.x-b.x);
+
+  const nearestText=(ax,lo,hi,maxDx=5.5)=>{
     const c=items.filter(i=>i.y>=lo&&i.y<hi&&Math.abs(i.x-ax)<=maxDx)
       .sort((p,q)=>Math.abs(p.x-ax)-Math.abs(q.x-ax)||p.y-q.y);
     if(!c.length)return '';
     const bestDx=Math.abs(c[0].x-ax);
-    return c.filter(i=>Math.abs(Math.abs(i.x-ax)-bestDx)<0.45)
+    return c.filter(i=>Math.abs(Math.abs(i.x-ax)-bestDx)<0.35)
       .sort((p,q)=>p.y-q.y).map(i=>i.text).join(' ').trim();
   };
 
-  // V9: NO usamos el texto del usuario como ancla. En ciertos reportes,
-  // especialmente TRT VOLKS BUS, PDF.js desplaza/combina EHERNANDEZM con
-  // Tipo Pago. Conductor 1 es numérico, estable y existe en cada viaje.
-  const anchors=items.filter(i=>i.y>=795&&i.y<846&&/^\d{5,8}$/.test(i.text.replace(/[, ]/g,'')))
-    .sort((a,b)=>a.x-b.x);
-
-  for(const a of anchors){
+  for(const a of candidates){
     const ax=a.x;
-    const totalRaw=nearestText(ax,292,330,6.5);
-    const userRaw=nearestText(ax,0,96,7.5);
-    const user=cleanUser(userRaw);
-    if(!totalRaw || !user || !/^[-\d,.$ ]+$/.test(totalRaw)) continue;
+    // Verificación estructural: un usuario real debe tener Total Ing y
+    // Conductor 1 alineados en la misma fila/columna del reporte.
+    const totalRaw=nearestText(ax,294,327,5.5);
+    const conductorRaw=nearestText(ax,800,840,5.5);
+    if(!totalRaw || !conductorRaw || !/^[-\d,.$ ]+$/.test(totalRaw)) continue;
 
     const r={
-      file:fileName,page:pageNum,brand,user,
-      tipoPago:userRaw.replace(new RegExp(user+'\\s*$','i'),'').trim(),
+      file:fileName,page:pageNum,brand,user:cleanUser(a.text),
+      tipoPago:nearestText(ax,52,94),
       bolAbordo:toN(nearestText(ax,92,114)),
       bolPrepago:toN(nearestText(ax,116,142)),
       bolManual:toN(nearestText(ax,143,170)),
@@ -129,22 +133,23 @@ async function extractPage(page,fileName,pageNum){
       hora:nearestText(ax,653,678),
       fecha:nearestText(ax,676,718),
       corrida:nearestText(ax,718,762),
-      conductor1:a.text.replace(/[, ]/g,'')
+      conductor1:conductorRaw
     };
 
-    // Los 6 conceptos que forman el ingreso del Excel/PDF.
-    r.sumConcepts=(r.taquilla||0)+(r.manual||0)+(r.abordo||0)+(r.prepago||0)+(r.promocion||0)+(r.equipaje||0);
-    r.totalMismatch=Math.abs((r.totalPdf||0)-r.sumConcepts)>0.02;
-    // Total Ing es el control oficial impreso por el mismo reporte. Normalmente
-    // coincide centavo a centavo con los 6 conceptos. Si PDF.js fragmenta una
-    // celda individual, evitamos que el tablero subestime el ingreso.
-    r.total=r.totalMismatch ? r.totalPdf : r.sumConcepts;
+    // Los seis conceptos exactos mostrados en el PDF:
+    // Ing Taquilla + Ing Manual + Ing Abordo + Prepago + Promoción + Equipaje.
+    r.total=(r.taquilla||0)+(r.manual||0)+(r.abordo||0)+(r.prepago||0)+(r.promocion||0)+(r.equipaje||0);
+    r.totalMismatch=Math.abs((r.totalPdf||0)-r.total)>0.02;
     if(validRow(r)){
       r.tickets=(r.bolAbordo||0)+(r.bolPrepago||0)+(r.bolManual||0)+(r.bolTaquilla||0);
       out.push(r);
     }
   }
-  return dedupe(out);
+  // Cada ancla de USUARIO PROCESA representa físicamente un viaje distinto.
+  // No deduplicamos: en TRT VOLKSBUS existen viajes legítimos con conductor, fecha,
+  // corrida y hora repetidos o parcialmente iguales, y la deduplicación anterior
+  // eliminaba registros válidos (especialmente de EHERNANDEZM).
+  return out;
 }
 function validRow(r){return !!r.user && /^[A-Z0-9._-]{3,}$/i.test(cleanUser(r.user)) && r.total>=0 && !!r.conductor1}
 function cleanUser(s){
@@ -155,7 +160,7 @@ function cleanUser(s){
 }
 function toN(s){const v=parseFloat(String(s||'0').replace(/,/g,'').replace(/[^0-9.-]/g,''));return Number.isFinite(v)?v:0}
 function findBrand(items,file){const all=items.map(i=>i.text).join(' ');let m=all.match(/Marca\s*:?\s*(SUR VOLKSBUS|TRT VOLKS BUS|SUR|TRT)/i);if(m)return m[1].toUpperCase().replace('VOLKS BUS','VOLKSBUS');let f=file.toUpperCase();return f.includes('SURVB')?'SUR VOLKSBUS':f.includes('TRTVB')?'TRT VOLKSBUS':f.includes('SUR')?'SUR':f.includes('TRT')?'TRT':'OTRA'}
-function dedupe(arr){const seen=new Set();return arr.filter(r=>{const k=[r.file,r.page,r.conductor1,r.corrida,r.fecha,r.hora,r.user].join('|');if(seen.has(k))return false;seen.add(k);return true})}
+function dedupe(arr){const seen=new Set();return arr.filter(r=>{const k=[r.file,r.page,Number(r.recordX||0).toFixed(3)].join('|');if(seen.has(k))return false;seen.add(k);return true})}
 
 function initializeFilters(){const users=[...new Set(rows.map(r=>r.user))].sort();selectedUsers=new Set(users);activeBrands=new Set(rows.map(r=>r.brand));renderUsers();renderBrands()}
 function renderUsers(){if(!rows.length){$('userlist').innerHTML='<div class="empty">Primero procesa los PDF.</div>';$('userMeta').textContent='0 usuarios';return}const q=$('userSearch').value.toLowerCase();const counts=group(rows,r=>r.user);const users=Object.keys(counts).sort().filter(u=>u.toLowerCase().includes(q));$('userMeta').textContent=`${Object.keys(counts).length} usuarios`;$('userlist').innerHTML=users.map(u=>`<div class="user"><label><input type="checkbox" data-user="${escapeAttr(u)}" ${selectedUsers.has(u)?'checked':''}> <span>${escapeHtml(u)}</span></label><span class="count">${counts[u].length} viajes</span></div>`).join('')||'<div class="empty">Sin coincidencias.</div>';$('userlist').querySelectorAll('input').forEach(c=>c.onchange=()=>{c.checked?selectedUsers.add(c.dataset.user):selectedUsers.delete(c.dataset.user);renderAll()})}
